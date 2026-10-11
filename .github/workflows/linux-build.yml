@@ -1,0 +1,52 @@
+name: Linux x86-64 build
+
+on:
+  push:
+    branches: [linux-port]
+    paths:
+      - "linux/**"
+      - ".github/workflows/linux-build.yml"
+  pull_request:
+    paths:
+      - "linux/**"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04   # x86-64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake g++ ninja-build pkg-config python3 \
+            qt6-base-dev libmpv-dev libgl1-mesa-dev
+
+      - name: Check generated command table is up to date
+        run: |
+          python3 linux/tools/gen_commands.py
+          git diff --exit-code linux/src/Commands.h
+
+      - name: Configure
+        run: cmake -S linux -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          strip build/mpc-hc
+          cp build/mpc-hc dist/
+          cp COPYING.txt dist/
+          tar -C dist -czf mpc-hc-linux-x86_64.tar.gz .
+          file build/mpc-hc
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpc-hc-linux-x86_64
+          path: mpc-hc-linux-x86_64.tar.gz
+          if-no-files-found: error
