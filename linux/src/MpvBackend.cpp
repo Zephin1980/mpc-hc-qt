@@ -4,6 +4,7 @@
 
 #include <QByteArray>
 #include <QMetaObject>
+#include <QtGlobal>
 #include <clocale>
 #include <cstring>
 
@@ -35,8 +36,13 @@ bool MpvBackend::init(quintptr wid) {
     if (!m_mpv)
         return false;
 
-    mpv_set_option_string(m_mpv, "vo", "gpu");
-    mpv_set_option_string(m_mpv, "hwdec", "auto-safe");
+    // Video output. Try the GPU renderer first and fall back to plain X11 output,
+    // which works in virtual machines without 3D acceleration (e.g. Hyper-V).
+    // Overrides for troubleshooting: MPC_HC_VO=x11|gpu|xv|..., MPC_HC_HWDEC=no|auto-safe|...
+    const QByteArray vo = qEnvironmentVariableIsSet("MPC_HC_VO") ? qgetenv("MPC_HC_VO") : QByteArray("gpu,x11");
+    const QByteArray hwdec = qEnvironmentVariableIsSet("MPC_HC_HWDEC") ? qgetenv("MPC_HC_HWDEC") : QByteArray("auto-safe");
+    mpv_set_option_string(m_mpv, "vo", vo.constData());
+    mpv_set_option_string(m_mpv, "hwdec", hwdec.constData());
     mpv_set_option_string(m_mpv, "keep-open", "yes");
     mpv_set_option_string(m_mpv, "idle", "yes");
     mpv_set_option_string(m_mpv, "osc", "no");
@@ -61,6 +67,9 @@ bool MpvBackend::init(quintptr wid) {
     mpv_observe_property(m_mpv, ObsVolume, "volume", MPV_FORMAT_DOUBLE);
     mpv_observe_property(m_mpv, ObsMute, "mute", MPV_FORMAT_FLAG);
     mpv_observe_property(m_mpv, ObsSpeed, "speed", MPV_FORMAT_DOUBLE);
+
+    // Forward mpv warnings/errors (video output init failures, decoder fallbacks) to stderr.
+    mpv_request_log_messages(m_mpv, "warn");
 
     mpv_set_wakeup_callback(m_mpv, wakeup, this);
     return true;
@@ -204,6 +213,11 @@ void MpvBackend::drainEvents() {
             break;
 
         switch (ev->event_id) {
+        case MPV_EVENT_LOG_MESSAGE: {
+            auto* m = static_cast<mpv_event_log_message*>(ev->data);
+            qWarning("[mpv/%s] %s", m->prefix, QByteArray(m->text).trimmed().constData());
+            break;
+        }
         case MPV_EVENT_FILE_LOADED: {
             m_hasMedia = true;
             char* title = mpv_get_property_string(m_mpv, "media-title");
